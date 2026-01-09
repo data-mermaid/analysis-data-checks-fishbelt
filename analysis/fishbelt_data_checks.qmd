@@ -1,0 +1,789 @@
+---
+title: "MERMAID Fishbelt Data Quality Checks"
+author: "Iain R. Caldwell"
+date: 01/07/2026
+format: 
+  html:
+    embed-resources: true
+editor: visual
+code-fold: true
+code-summary: "Show the code"
+toc: true
+title-block-banner: "#f0f3f5"
+title-block-banner-color: "black"
+include-after-body: "footer.html"
+---
+
+------------------------------------------------------------------------
+
+This code performs data quality checks on MERMAID projects with fish belt data, including observer comparisons, outlier detection, family diversity analysis, and biomass composition.
+
+------------------------------------------------------------------------
+
+## Getting example fishbelt data from MERMAID
+
+Loads the necessary R packages and gets an example MERMAID project with fish belt data. Since the code relies on all three scales of MERMAID data (observations, sample units, and sample events), it is necessary to either select a MERMAID project whose permissions are set to public for fish belt or to use a project for which you are a member. Here I am exporting a public project so anyone can run the code - in this case a project tagged with "WCS"). However, I also provide some example code (hashed out) that can be used to get a project for which you are a member.
+
+**Note:** This step requires authentication even if you are accessing a public project. This means you need to create a free MERMAID account if you don't already have one.
+
+```{r}
+#| label: Load packages and export data
+#| warning: false
+
+rm(list = ls()) #remove past stored objects
+options(scipen = 999) #turn off scientific notation
+
+#### Load packages ####
+library(mermaidr)
+library(tidyverse)
+library(plotly)
+library(DT)
+library(ggplot2)
+library(ggpubr)
+library(knitr)
+
+#### Get data from an example project with public fishbelt data ####
+allPublicFisbeltProjects <- mermaid_get_summary_sampleevents() %>% 
+  filter(data_policy_beltfish == "public" & 
+           !is.na(beltfish_biomass_kgha_avg) &
+           !country %in% c("Indonesia", "Philippines") &
+           grepl(pattern = "Blue Ventures", x = tags)) %>%
+  group_by(project_id, project, tags, project_notes) %>% 
+  dplyr::summarise(NumSites = length(site),
+                   TotalSampleUnits = sum(beltfish_sample_unit_count)) %>% 
+  arrange(desc(TotalSampleUnits))
+
+targetProject <- allPublicFisbeltProjects[1,] #choose first project as example
+
+targetFishAllData <- 
+  mermaid_get_project_data(project = allPublicFisbeltProjects$project_id[1],
+                           method = "fishbelt",
+                           data = "all")
+
+# #### Get data from a project for which you are a member ####
+# my_projects <- mermaid_get_my_projects()
+# 
+# #The next line gets the first project - change the number to get a different one
+# targetProject <- my_projects[1,] 
+# 
+# # Get all data levels
+# targetFishAllData <- targetProject %>% 
+#   mermaid_get_project_data(method = "fishbelt", data = "all")
+
+# Extract the three levels
+observations_data <- targetFishAllData$observations
+sampleunits_data <- targetFishAllData$sampleunits
+sampleevents_data <- targetFishAllData$sampleevents
+
+cat("**Project analyzed:**", targetProject$project[1], "\n\n")
+cat("**Project ID:**", targetProject$project_id[1], "\n\n")
+if (!is.na(targetProject$tags[1])) {
+  cat("**Tags:**", targetProject$tags[1], "\n\n")
+}
+if (!is.na(targetProject$project_notes[1])) {
+  cat("**Project notes:**", targetProject$project_notes[1], "\n\n")
+}
+
+# Print data summary
+cat("Data extracted:\n")
+cat("- Observations:", nrow(observations_data), "records\n")
+cat("- Sample Units:", nrow(sampleunits_data), "transects\n")
+cat("- Sample Events:", nrow(sampleevents_data), "sites\n")
+```
+
+------------------------------------------------------------------------
+
+## Observer Comparisons
+
+Comparing fish biomass and abundance patterns among observers to identify potential observer effects.
+
+**Note**: Many transects have multiple observers listed. The analyses below show patterns for each observer across all transects they participated in, but systematic differences could reflect either individual observer effects or the effects of observer pairings.
+
+### Biomass by Observer
+
+```{r}
+#| label: Observer biomass comparison
+
+# First, aggregate observations to transect level (sum biomass within transects)
+transect_biomass <- observations_data %>%
+  group_by(sample_unit_id, observers, site, transect_number) %>%
+  summarise(
+    total_biomass = sum(biomass_kgha, na.rm = TRUE),
+    total_abundance = sum(count, na.rm = TRUE),
+    n_observations = n(),
+    .groups = 'drop'
+  )
+
+# Then split observers and calculate statistics across transects
+observer_biomass <- transect_biomass %>%
+  separate_rows(observers, sep = ", ") %>%
+  group_by(observers) %>%
+  summarise(
+    n_transects = n(),
+    mean_biomass = mean(total_biomass, na.rm = TRUE),
+    median_biomass = median(total_biomass, na.rm = TRUE),
+    q025 = quantile(total_biomass, 0.025, na.rm = TRUE),
+    q975 = quantile(total_biomass, 0.975, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(mean_biomass))
+
+kable(observer_biomass,
+      digits = 2,
+      col.names = c("Observer", "N Transects", "Mean Biomass (kg/ha)", 
+                    "Median Biomass", "2.5% Quantile", "97.5% Quantile"),
+      caption = "Fish Biomass Summary by Observer (transect-level totals)")
+```
+
+### Biomass Distribution by Observer
+
+```{r}
+#| label: Observer biomass boxplot
+#| fig-width: 10
+#| fig-height: 6
+
+# Prepare data for plotting - split observers
+plot_data <- transect_biomass %>%
+  separate_rows(observers, sep = ", ")
+
+# Filter to observers with at least 5 transects for meaningful comparison
+observers_to_plot <- plot_data %>%
+  count(observers) %>%
+  filter(n >= 5) %>%
+  pull(observers)
+
+plot_data_filtered <- plot_data %>%
+  filter(observers %in% observers_to_plot)
+
+ggplot(plot_data_filtered, 
+       aes(x = reorder(observers, total_biomass, FUN = median), 
+           y = total_biomass)) +
+  geom_boxplot(fill = "#69b3a2", alpha = 0.7) +
+  coord_flip() +
+  labs(
+    title = "Fish Biomass Distribution by Observer",
+    subtitle = "Observers with ≥5 transects shown; total biomass per transect",
+    x = "Observer",
+    y = "Total Biomass (kg/ha)"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10, colour = "black"),
+    axis.title = element_text(size = 12, colour = "black"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30")
+  )
+```
+
+### Abundance By Observer
+
+```{r}
+#| label: Observer abundance comparison
+
+# Calculate abundance summary by observer using transect-level totals
+observer_abundance <- transect_biomass %>%
+  separate_rows(observers, sep = ", ") %>%
+  group_by(observers) %>%
+  summarise(
+    n_transects = n(),
+    mean_abundance = mean(total_abundance, na.rm = TRUE),
+    median_abundance = median(total_abundance, na.rm = TRUE),
+    q025 = quantile(total_abundance, 0.025, na.rm = TRUE),
+    q975 = quantile(total_abundance, 0.975, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(mean_abundance))
+
+kable(observer_abundance,
+      digits = 2,
+      col.names = c("Observer", "N Transects", "Mean Abundance", 
+                    "Median Abundance", "2.5% Quantile", "97.5% Quantile"),
+      caption = "Fish Abundance Summary by Observer (transect-level totals)")
+```
+
+------------------------------------------------------------------------
+
+## Taxonomic Identification by Observer
+
+```{r}
+#| label: Observer taxonomic identification
+
+# First calculate taxa per transect for each observer
+taxa_per_transect <- observations_data %>%
+  separate_rows(observers, sep = ", ") %>%
+  group_by(observers, sample_unit_id) %>%
+  summarise(
+    n_taxa_transect = n_distinct(fish_taxon),
+    n_genera_transect = n_distinct(fish_genus),
+    n_families_transect = n_distinct(fish_family),
+    .groups = 'drop'
+  )
+
+# Then calculate summary statistics across transects for each observer
+observer_taxonomy <- taxa_per_transect %>%
+  group_by(observers) %>%
+  summarise(
+    n_transects = n(),
+    mean_taxa_per_transect = mean(n_taxa_transect, na.rm = TRUE),
+    median_taxa_per_transect = median(n_taxa_transect, na.rm = TRUE),
+    q025_taxa = quantile(n_taxa_transect, 0.025, na.rm = TRUE),
+    q975_taxa = quantile(n_taxa_transect, 0.975, na.rm = TRUE),
+    mean_genera_per_transect = mean(n_genera_transect, na.rm = TRUE),
+    mean_families_per_transect = mean(n_families_transect, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Also get overall unique taxa counts across all transects
+overall_taxonomy <- observations_data %>%
+  separate_rows(observers, sep = ", ") %>%
+  group_by(observers) %>%
+  summarise(
+    total_unique_taxa = n_distinct(fish_taxon),
+    total_unique_genera = n_distinct(fish_genus),
+    total_unique_families = n_distinct(fish_family),
+    n_observations = n(),
+    .groups = 'drop'
+  )
+
+# Combine the two summaries
+observer_taxonomy <- observer_taxonomy %>%
+  left_join(overall_taxonomy, by = "observers") %>%
+  arrange(desc(mean_taxa_per_transect))
+
+kable(observer_taxonomy,
+      digits = 2,
+      col.names = c("Observer", "N Transects", 
+                    "Mean Taxa/Transect", "Median Taxa/Transect",
+                    "2.5% Quantile", "97.5% Quantile",
+                    "Mean Genera/Transect", "Mean Families/Transect",
+                    "Total Unique Taxa", "Total Unique Genera", 
+                    "Total Unique Families", "N Observations"),
+      caption = "Taxonomic Identification Summary by Observer")
+```
+
+## Taxonomic Resolution Comparison
+
+```{r}
+#| label: Observer taxonomy plot
+#| fig-width: 10
+#| fig-height: 6
+
+# Filter to observers with at least 5 transects
+observer_taxonomy_filtered <- observer_taxonomy %>%
+  filter(n_transects >= 5)
+
+ggplot(observer_taxonomy_filtered,
+       aes(x = reorder(observers, mean_taxa_per_transect),
+           y = mean_taxa_per_transect)) +
+  geom_col(fill = "#4287f5", alpha = 0.7, color = "black", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = q025_taxa, ymax = q975_taxa),
+                width = 0.3, linewidth = 0.5) +
+  coord_flip() +
+  labs(
+    title = "Taxonomic Identification Ability by Observer",
+    subtitle = "Observers with ≥5 transects shown; error bars show 95% quantiles (2.5% - 97.5%)",
+    x = "Observer",
+    y = "Mean Unique Taxa per Transect"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10, colour = "black"),
+    axis.title = element_text(size = 12, colour = "black"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30")
+  )
+```
+
+## Observer Pairing Patterns
+
+```{r}
+#| label: Observer pairings
+
+# Identify common observer pairings using sample events
+observer_pairs <- sampleevents_data %>%
+  filter(str_detect(observers, ",")) %>%  # Only multi-observer sample events
+  count(observers, sort = TRUE) %>%
+  head(10)
+
+kable(observer_pairs,
+      col.names = c("Observer Pair", "N Sample Events"),
+      caption = "Top 10 Most Common Observer Pairings (at sample event level)")
+```
+
+## Outlier Detection
+
+### High Biomass Observations
+
+Identifying sites with unusually high fish biomass (top 10%).
+
+```{r}
+#| label: High biomass outliers
+
+# Calculate 90th percentile
+biomass_90th <- quantile(sampleevents_data$biomass_kgha_avg, 
+                         probs = 0.90, na.rm = TRUE)
+
+high_biomass_sites <- sampleevents_data %>%
+  filter(biomass_kgha_avg >= biomass_90th) %>%
+  select(site, sample_date, observers, biomass_kgha_avg, 
+         sample_unit_count, depth_avg) %>%
+  arrange(desc(biomass_kgha_avg))
+
+kable(high_biomass_sites,
+      digits = 1,
+      col.names = c("Site", "Date", "Observer", "Biomass (kg/ha)", 
+                    "N Transects", "Depth (m)"),
+      caption = paste0("Sites with High Biomass (≥ ", 
+                      round(biomass_90th, 1), " kg/ha - 90th percentile)"))
+```
+
+### Interactive Scatter Plot - Biomass vs Abundance
+
+```{r}
+#| label: Biomass abundance scatter
+
+# Calculate mean abundance per sample event
+se_with_abundance <- sampleunits_data %>%
+  group_by(sample_event_id) %>%
+  summarise(mean_abundance = mean(total_abundance, na.rm = TRUE)) %>%
+  right_join(sampleevents_data, by = "sample_event_id")
+
+# Create interactive scatter plot
+scatter_plot <- plot_ly(
+  data = se_with_abundance,
+  x = ~mean_abundance,
+  y = ~biomass_kgha_avg,
+  type = "scatter",
+  mode = "markers",
+  text = ~paste("Site:", site,
+                "<br>Biomass:", round(biomass_kgha_avg, 1), "kg/ha",
+                "<br>Abundance:", round(mean_abundance, 1),
+                "<br>Observer:", observers),
+  hoverinfo = "text",
+  marker = list(
+    size = 10,
+    color = ~biomass_kgha_avg,
+    colorscale = list(c(0, "#d13823"), c(0.5, "#f3a224"), c(1, "#277d1d")),
+    colorbar = list(title = "Biomass<br>(kg/ha)")
+  )
+) %>%
+  layout(
+    title = "Fish Biomass vs Abundance",
+    xaxis = list(title = "Mean Fish Abundance (count per transect)"),
+    yaxis = list(title = "Fish Biomass (kg/ha)"),
+    hovermode = "closest"
+  )
+
+scatter_plot
+```
+
+### Outlier Sites Table
+
+```{r}
+#| label: Outlier detection stats
+
+# Identify outliers using different methods for high and low values
+# Low outliers: static threshold (biologically meaningful low biomass)
+low_threshold <- 50  # kg/ha - unusually low biomass
+# High outliers: IQR method
+Q1 <- quantile(sampleevents_data$biomass_kgha_avg, 0.25, na.rm = TRUE)
+Q3 <- quantile(sampleevents_data$biomass_kgha_avg, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+upper_bound <- Q3 + 1.5 * IQR_val
+
+outliers <- sampleevents_data %>%
+  filter(biomass_kgha_avg < low_threshold | biomass_kgha_avg > upper_bound) %>%
+  mutate(outlier_type = ifelse(biomass_kgha_avg < low_threshold, 
+                                "Low", "High")) %>%
+  select(site, sample_date, biomass_kgha_avg, outlier_type, observers) %>%
+  arrange(outlier_type, biomass_kgha_avg)
+
+kable(outliers,
+      digits = 1,
+      col.names = c("Site", "Date", "Biomass (kg/ha)", 
+                    "Outlier Type", "Observer"),
+      caption = paste0("Outlier Sites (<", low_threshold, 
+                      " kg/ha or >", round(upper_bound, 1), " kg/ha)"))
+```
+
+------------------------------------------------------------------------
+
+## Shark Observations
+
+### Shark Presence and Abundance
+
+```{r}
+#| label: Shark observations
+
+# Identify shark families (Carcharhinidae, Sphyrnidae, etc.)
+shark_families <- c("Carcharhinidae", "Sphyrnidae", "Alopiidae", 
+                    "Lamnidae", "Rhincodontidae")
+
+shark_obs <- observations_data %>%
+  filter(fish_family %in% shark_families)
+
+if(nrow(shark_obs) > 0) {
+  # Summarize shark observations by site
+  shark_summary <- shark_obs %>%
+    group_by(site, fish_family, fish_taxon) %>%
+    summarise(
+      total_count = sum(count, na.rm = TRUE),
+      total_biomass = sum(biomass_kgha, na.rm = TRUE),
+      n_observations = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(total_count))
+  
+  kable(shark_summary,
+        digits = 2,
+        col.names = c("Site", "Family", "Species", "Total Count", 
+                      "Total Biomass (kg/ha)", "N Obs"),
+        caption = "Shark Observations Summary")
+  
+  # Sites with sharks
+  cat("\n\nTotal sites surveyed:", 
+      length(unique(observations_data$site)), "\n")
+  cat("Sites with shark observations:", 
+      length(unique(shark_obs$site)), "\n")
+  cat("Percentage of sites with sharks:", 
+      round(100 * length(unique(shark_obs$site)) / 
+              length(unique(observations_data$site)), 1), "%\n")
+} else {
+  cat("No shark observations in the dataset.")
+}
+```
+
+### Shark Biomass by Site
+
+```{r}
+#| label: Shark biomass plot
+#| fig-width: 10
+#| fig-height: 6
+
+if(nrow(shark_obs) > 0) {
+  # Calculate shark biomass per sample event
+  shark_biomass_summary <- observations_data %>%
+    mutate(is_shark = fish_family %in% shark_families) %>%
+    group_by(sample_event_id, site, is_shark) %>%
+    summarise(biomass = sum(biomass_kgha, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = is_shark, values_from = biomass, 
+                values_fill = 0) %>%
+    rename(shark_biomass = `TRUE`, other_biomass = `FALSE`) %>%
+    mutate(total_biomass = shark_biomass + other_biomass,
+           shark_percent = 100 * shark_biomass / total_biomass)
+  
+  # Plot
+  ggplot(shark_biomass_summary, 
+         aes(x = reorder(site, shark_biomass), y = shark_biomass)) +
+    geom_col(fill = "#2c7bb6", alpha = 0.8) +
+    coord_flip() +
+    labs(
+      title = "Shark Biomass by Site",
+      x = "Site",
+      y = "Shark Biomass (kg/ha)"
+    ) +
+    theme_classic() +
+    theme(
+      axis.text = element_text(size = 10, colour = "black"),
+      axis.title = element_text(size = 12, colour = "black"),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+    )
+} else {
+  cat("No shark observations in the dataset.")
+}
+```
+
+------------------------------------------------------------------------
+
+## Fish Family Diversity
+
+### Number of Fish Families
+
+```{r}
+#| label: Family diversity summary
+
+# Count unique families
+n_families <- length(unique(observations_data$fish_family))
+
+cat("Total number of fish families observed:", n_families, "\n\n")
+
+# Families by site
+families_by_site <- observations_data %>%
+  group_by(site) %>%
+  summarise(
+    n_families = n_distinct(fish_family),
+    n_genera = n_distinct(fish_genus),
+    n_species = n_distinct(fish_taxon),
+    total_observations = n()
+  ) %>%
+  arrange(desc(n_families))
+
+kable(families_by_site,
+      col.names = c("Site", "N Families", "N Genera", 
+                    "N Species", "Total Obs"),
+      caption = "Taxonomic Diversity by Site")
+```
+
+### Family Richness Distribution
+
+```{r}
+#| label: Family richness histogram
+#| fig-width: 8
+#| fig-height: 5
+
+ggplot(families_by_site, aes(x = n_families)) +
+  geom_histogram(binwidth = 2, fill = "#4575b4", 
+                 color = "black", alpha = 0.7) +
+  labs(
+    title = "Distribution of Fish Family Richness Across Sites",
+    x = "Number of Fish Families",
+    y = "Number of Sites"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 11, colour = "black"),
+    axis.title = element_text(size = 12, colour = "black"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+```
+
+### Complete Family List
+
+```{r}
+#| label: Family list
+
+family_list <- observations_data %>%
+  group_by(fish_family) %>%
+  summarise(
+    n_species = n_distinct(fish_taxon),
+    total_count = sum(count, na.rm = TRUE)
+  ) %>%
+  arrange(fish_family)
+
+datatable(family_list,
+          colnames = c("Family", "N Species", "N Observations", "Total Count"),
+          caption = "Complete List of Fish Families",
+          options = list(pageLength = 15, autoWidth = TRUE))
+```
+
+------------------------------------------------------------------------
+
+## Biomass Composition by Family
+
+### Top Families by Biomass
+
+Identifying which fish families contribute most to total biomass.
+
+```{r}
+#| label: Top families biomass
+
+# Extract all family-specific biomass columns from sample events
+family_cols <- grep("^biomass_kgha_fish_family_avg_", 
+                    names(sampleevents_data), value = TRUE)
+
+# Calculate true mean biomass for each family (replacing NAs with 0)
+family_biomass <- sampleevents_data %>%
+  select(all_of(family_cols)) %>%
+  pivot_longer(cols = everything(),
+               names_to = "fish_family",
+               values_to = "biomass",
+               names_prefix = "biomass_kgha_fish_family_avg_") %>%
+  # Replace NAs with 0 to get true mean (including sites where family is absent)
+  mutate(fish_family = str_to_title(fish_family),
+         biomass = replace_na(biomass, 0)) %>%
+  group_by(fish_family) %>%
+  summarise(
+    mean_biomass = mean(biomass, na.rm = TRUE),
+    sd_biomass = sd(biomass, na.rm = TRUE),
+    n_sites_present = sum(biomass > 0),
+    n_sites_total = n()
+  ) %>%
+  mutate(
+    percent_sites = 100 * n_sites_present / n_sites_total,
+    # Calculate contribution to overall mean biomass across all families
+    percent_total = 100 * mean_biomass / sum(mean_biomass)
+  ) %>%
+  arrange(desc(mean_biomass))
+
+# Top 15 families
+top_families <- head(family_biomass, 15)
+
+kable(top_families,
+      digits = 2,
+      col.names = c("Family", "Mean Biomass (kg/ha)", "SD", 
+                    "Sites Present", "Total Sites", "% Sites Present", 
+                    "% of Total Biomass"),
+      caption = "Top 15 Fish Families by Mean Biomass (true mean including zeros)")
+```
+
+### Biomass Proportion - Top Families
+
+```{r}
+#| label: Family biomass pie chart
+#| fig-width: 10
+#| fig-height: 8
+
+# Prepare data for pie chart - top 10 plus "Other"
+top10_families <- head(family_biomass, 10)
+other_biomass <- sum(family_biomass$mean_biomass[11:nrow(family_biomass)])
+
+pie_data <- top10_families %>%
+  select(fish_family, mean_biomass) %>%
+  bind_rows(tibble(fish_family = "Other families", 
+                   mean_biomass = other_biomass))
+
+# Create pie chart
+plot_ly(pie_data, 
+        labels = ~fish_family, 
+        values = ~mean_biomass,
+        type = 'pie',
+        textposition = 'inside',
+        textinfo = 'label+percent',
+        hoverinfo = 'text',
+        text = ~paste(fish_family, '<br>',
+                     round(mean_biomass, 1), 'kg/ha'),
+        marker = list(line = list(color = '#FFFFFF', width = 2))) %>%
+  layout(title = "Fish Biomass Composition by Family (Top 10 - Mean Biomass)",
+         showlegend = TRUE,
+         legend = list(orientation = 'v', 
+                      x = 1.1, y = 0.5))
+```
+
+### Biomass Composition by Trophic Group
+
+```{r}
+#| label: Trophic group biomass
+
+# Get trophic group biomass from sample events
+trophic_cols <- grep("biomass_kgha_trophic_group_avg_", 
+                     names(sampleevents_data), value = TRUE)
+
+trophic_biomass <- sampleevents_data %>%
+  select(site, all_of(trophic_cols)) %>%
+  pivot_longer(cols = all_of(trophic_cols),
+               names_to = "trophic_group",
+               values_to = "biomass",
+               names_prefix = "biomass_kgha_trophic_group_avg_") %>%
+  # Replace NAs with 0 to get true mean (including sites where group is absent)
+  mutate(biomass = replace_na(biomass, 0)) %>%
+  group_by(trophic_group) %>%
+  summarise(
+    mean_biomass = mean(biomass, na.rm = TRUE),
+    q025 = quantile(biomass, 0.025, na.rm = TRUE),
+    q975 = quantile(biomass, 0.975, na.rm = TRUE),
+    n_sites_present = sum(biomass > 0),
+    n_sites_total = n()
+  ) %>%
+  mutate(
+    trophic_group = case_when(
+      trophic_group == "planktivore" ~ "Planktivore",
+      trophic_group == "herbivore_macroalgae" ~ "Herbivore (macroalgae)",
+      trophic_group == "herbivore_detritivore" ~ "Herbivore (detritivore)",
+      trophic_group == "invertivore_sessile" ~ "Invertivore (sessile)",
+      trophic_group == "invertivore_mobile" ~ "Invertivore (mobile)",
+      trophic_group == "omnivore" ~ "Omnivore",
+      trophic_group == "piscivore" ~ "Piscivore",
+      TRUE ~ trophic_group
+    ),
+    percent_sites = 100 * n_sites_present / n_sites_total,
+    percent_total = 100 * mean_biomass / sum(mean_biomass)
+  ) %>%
+  arrange(desc(mean_biomass))
+
+kable(trophic_biomass,
+      digits = 2,
+      col.names = c("Trophic Group", "Mean Biomass (kg/ha)", 
+                    "2.5% Quantile", "97.5% Quantile",
+                    "Sites Present", "Total Sites", "% Sites Present",
+                    "% of Total Biomass"),
+      caption = "Fish Biomass by Trophic Group (true mean including zeros)")
+```
+
+### Trophic Group Composition Bar Plot
+
+```{r}
+#| label: Trophic group bar plot
+#| fig-width: 10
+#| fig-height: 6
+
+ggplot(trophic_biomass, 
+       aes(x = reorder(trophic_group, mean_biomass), 
+           y = mean_biomass, fill = trophic_group)) +
+  geom_col(alpha = 0.8, color = "black", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = q025, ymax = q975),
+                width = 0.3, linewidth = 0.5) +
+  coord_flip() +
+  labs(
+    title = "Mean Fish Biomass by Trophic Group",
+    subtitle = "Error bars show 95% quantiles (2.5% - 97.5%)",
+    x = "Trophic Group",
+    y = "Mean Biomass (kg/ha)"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 11, colour = "black"),
+    axis.title = element_text(size = 12, colour = "black"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30")
+  ) +
+  scale_fill_brewer(palette = "Set3")
+```
+
+------------------------------------------------------------------------
+
+## Data Quality Summary
+
+```{r}
+#| label: Summary statistics
+
+cat("=== DATA QUALITY SUMMARY ===\n\n")
+
+cat("Sample Coverage:\n")
+cat("- Total sample events:", nrow(sampleevents_data), "\n")
+cat("- Total transects:", nrow(sampleunits_data), "\n")
+cat("- Total observations:", nrow(observations_data), "\n")
+cat("- Unique sites:", length(unique(sampleevents_data$site)), "\n")
+cat("- Unique observers:", 
+    length(unique(sampleevents_data$observers)), "\n\n")
+
+cat("Taxonomic Diversity:\n")
+cat("- Fish families:", n_families, "\n")
+cat("- Fish genera:", length(unique(observations_data$fish_genus)), "\n")
+cat("- Fish species:", length(unique(observations_data$fish_taxon)), "\n\n")
+
+cat("Biomass Statistics (kg/ha):\n")
+cat("- Mean:", round(mean(sampleevents_data$biomass_kgha_avg, 
+                         na.rm = TRUE), 1), "\n")
+cat("- Median:", round(median(sampleevents_data$biomass_kgha_avg, 
+                           na.rm = TRUE), 1), "\n")
+cat("- SD:", round(sd(sampleevents_data$biomass_kgha_avg, 
+                      na.rm = TRUE), 1), "\n")
+cat("- Range:", round(min(sampleevents_data$biomass_kgha_avg, 
+                          na.rm = TRUE), 1), "-",
+    round(max(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n\n")
+
+cat("Data Quality Flags:\n")
+cat("- High biomass outliers (>90th percentile):", 
+    nrow(high_biomass_sites), "\n")
+cat("- Statistical outliers (IQR method):", nrow(outliers), "\n")
+cat("- Sites with shark observations:", 
+    ifelse(exists("shark_obs") && nrow(shark_obs) > 0,
+           length(unique(shark_obs$site)), 0), "\n")
+```
+
+------------------------------------------------------------------------
+
+## Notes and Recommendations
+
+Based on this data quality check:
+
+1.  **Observer Consistency**: Review any systematic differences between observers in biomass or abundance estimates.
+
+2.  **Outliers**: Investigate outlier sites to determine if they represent true ecological variation or potential data entry errors.
+
+3.  **Shark Observations**: Consider the ecological significance of sites with shark presence as potential indicators of reef health.
+
+4.  **Family Diversity**: Compare family richness across sites in relation to management regimes or environmental conditions.
+
+5.  **Biomass Composition**: The dominant families identified should align with expected community structure for the region.

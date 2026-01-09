@@ -1,0 +1,13 @@
+---
+title: "Welcome"
+format: 
+  html: #for website
+    embed-resources: true
+editor: visual
+---
+
+**MERMAID Fishbelt Data Quality Checks**
+
+-   [Rendered html](fishbelt_data_checks.html)
+
+-   Repo: <https://github.com/data-mermaid/analysis-data-checks-fishbelt>

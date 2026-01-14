@@ -82,6 +82,7 @@ sampleevents_data <- targetFishAllData$sampleevents
 
 ```{r}
 #| label: Project info
+#| results: asis
 
 # Assemble project information message
 project_info <- paste0(
@@ -99,16 +100,16 @@ if (!is.na(allPublicFisbeltProjects$project_notes[1]) && allPublicFisbeltProject
   project_info <- paste0(project_info, "**Project notes:** ", allPublicFisbeltProjects$project_notes[1], "\n\n")
 }
 
-#Add data extracted
+# Add data extracted
 project_info <- paste0(project_info,
-                       "Data extracted:\n", 
-                       paste0("- Observations: ", nrow(observations_data), " records\n"),
-                       paste0("- Sample Units: ", nrow(sampleunits_data), " transects\n"),
-                       paste0("- Sample Events: ", nrow(sampleevents_data), " sites\n"),
-                       "\n\n")
+                       "**Data extracted:**\n\n", 
+                       "- Observations: ", nrow(observations_data), " records\n",
+                       "- Sample Units: ", nrow(sampleunits_data), " transects\n",
+                       "- Sample Events: ", nrow(sampleevents_data), " sites\n",
+                       "\n")
+
 # Display the assembled message
 cat(project_info)
-
 ```
 
 ## Observer Comparisons
@@ -754,34 +755,33 @@ ggplot(trophic_biomass,
 
 ```{r}
 #| label: Summary statistics
+#| results: asis
 
-# Assemble the data quality summary message
+# Assemble the data quality summary message with markdown
 summary_msg <- paste0(
-  "=== DATA QUALITY SUMMARY ===\n\n",
+  "#### Sample Coverage\n\n",
+  "- **Total sample events:** ", nrow(sampleevents_data), "\n",
+  "- **Total transects:** ", nrow(sampleunits_data), "\n",
+  "- **Total observations:** ", nrow(observations_data), "\n",
+  "- **Unique sites:** ", length(unique(sampleevents_data$site)), "\n",
+  "- **Unique observers:** ", length(unique(sampleevents_data$observers)), "\n\n",
   
-  "Sample Coverage:\n",
-  "- Total sample events: ", nrow(sampleevents_data), "\n",
-  "- Total transects: ", nrow(sampleunits_data), "\n",
-  "- Total observations: ", nrow(observations_data), "\n",
-  "- Unique sites: ", length(unique(sampleevents_data$site)), "\n",
-  "- Unique observers: ", length(unique(sampleevents_data$observers)), "\n\n",
+  "#### Taxonomic Diversity\n\n",
+  "- **Fish families:** ", n_families, "\n",
+  "- **Fish genera:** ", length(unique(observations_data$fish_genus)), "\n",
+  "- **Fish species:** ", length(unique(observations_data$fish_taxon)), "\n\n",
   
-  "Taxonomic Diversity:\n",
-  "- Fish families: ", n_families, "\n",
-  "- Fish genera: ", length(unique(observations_data$fish_genus)), "\n",
-  "- Fish species: ", length(unique(observations_data$fish_taxon)), "\n\n",
-  
-  "Biomass Statistics (kg/ha):\n",
-  "- Mean: ", round(mean(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
-  "- Median: ", round(median(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
-  "- SD: ", round(sd(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
-  "- Range: ", round(min(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), " - ",
+  "#### Biomass Statistics (kg/ha)\n\n",
+  "- **Mean:** ", round(mean(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- **Median:** ", round(median(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- **SD:** ", round(sd(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- **Range:** ", round(min(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), " - ",
              round(max(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n\n",
   
-  "Data Quality Flags:\n",
-  "- High biomass outliers (>90th percentile): ", nrow(high_biomass_sites), "\n",
-  "- Statistical outliers (IQR method): ", nrow(outliers), "\n",
-  "- Sites with shark observations: ", 
+  "#### Data Quality Flags\n\n",
+  "- **High biomass outliers (>90th percentile):** ", nrow(high_biomass_sites), "\n",
+  "- **Statistical outliers (IQR method):** ", nrow(outliers), "\n",
+  "- **Sites with shark observations:** ", 
     ifelse(exists("shark_obs") && nrow(shark_obs) > 0,
            length(unique(shark_obs$site)), 0), "\n"
 )

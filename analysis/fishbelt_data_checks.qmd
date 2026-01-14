@@ -22,7 +22,7 @@ This code performs data quality checks on MERMAID projects with fish belt data, 
 
 ## Getting example fishbelt data from MERMAID
 
-Loads the necessary R packages and gets an example MERMAID project with fish belt data. Since the code relies on all three scales of MERMAID data (observations, sample units, and sample events), it is necessary to either select a MERMAID project whose permissions are set to public for fish belt or to use a project for which you are a member. Here I am exporting a public project so anyone can run the code - in this case a project tagged with "WCS"). However, I also provide some example code (hashed out) that can be used to get a project for which you are a member.
+Loads the necessary R packages and gets an example MERMAID project with fish belt data. Since the code relies on all three scales of MERMAID data (observations, sample units, and sample events), it is necessary to either select a MERMAID project whose permissions are set to public for fish belt or to use a project for which you are a member. Here I am exporting a public project so anyone can run the code - in this case a project tagged with "WCS". However, I also provide some example code (hashed out) that can be used to get a project for which you are a member.
 
 **Note:** This step requires authentication even if you are accessing a public project. This means you need to create a free MERMAID account if you don't already have one.
 
@@ -74,24 +74,42 @@ targetFishAllData <-
 observations_data <- targetFishAllData$observations
 sampleunits_data <- targetFishAllData$sampleunits
 sampleevents_data <- targetFishAllData$sampleevents
-
-cat("**Project analyzed:**", targetProject$project[1], "\n\n")
-cat("**Project ID:**", targetProject$project_id[1], "\n\n")
-if (!is.na(targetProject$tags[1])) {
-  cat("**Tags:**", targetProject$tags[1], "\n\n")
-}
-if (!is.na(targetProject$project_notes[1])) {
-  cat("**Project notes:**", targetProject$project_notes[1], "\n\n")
-}
-
-# Print data summary
-cat("Data extracted:\n")
-cat("- Observations:", nrow(observations_data), "records\n")
-cat("- Sample Units:", nrow(sampleunits_data), "transects\n")
-cat("- Sample Events:", nrow(sampleevents_data), "sites\n")
 ```
 
 ------------------------------------------------------------------------
+
+## Project information
+
+```{r}
+#| label: Project info
+
+# Assemble project information message
+project_info <- paste0(
+  "**Project analyzed:** ", allPublicFisbeltProjects$project[1], "\n\n",
+  "**Project ID:** ", allPublicFisbeltProjects$project_id[1], "\n\n"
+)
+
+# Add tags if available
+if (!is.na(allPublicFisbeltProjects$tags[1]) && allPublicFisbeltProjects$tags[1] != "") {
+  project_info <- paste0(project_info, "**Tags:** ", allPublicFisbeltProjects$tags[1], "\n\n")
+}
+
+# Add project notes if available
+if (!is.na(allPublicFisbeltProjects$project_notes[1]) && allPublicFisbeltProjects$project_notes[1] != "") {
+  project_info <- paste0(project_info, "**Project notes:** ", allPublicFisbeltProjects$project_notes[1], "\n\n")
+}
+
+#Add data extracted
+project_info <- paste0(project_info,
+                       "Data extracted:\n", 
+                       paste0("- Observations: ", nrow(observations_data), " records\n"),
+                       paste0("- Sample Units: ", nrow(sampleunits_data), " transects\n"),
+                       paste0("- Sample Events: ", nrow(sampleevents_data), " sites\n"),
+                       "\n\n")
+# Display the assembled message
+cat(project_info)
+
+```
 
 ## Observer Comparisons
 
@@ -737,39 +755,39 @@ ggplot(trophic_biomass,
 ```{r}
 #| label: Summary statistics
 
-cat("=== DATA QUALITY SUMMARY ===\n\n")
-
-cat("Sample Coverage:\n")
-cat("- Total sample events:", nrow(sampleevents_data), "\n")
-cat("- Total transects:", nrow(sampleunits_data), "\n")
-cat("- Total observations:", nrow(observations_data), "\n")
-cat("- Unique sites:", length(unique(sampleevents_data$site)), "\n")
-cat("- Unique observers:", 
-    length(unique(sampleevents_data$observers)), "\n\n")
-
-cat("Taxonomic Diversity:\n")
-cat("- Fish families:", n_families, "\n")
-cat("- Fish genera:", length(unique(observations_data$fish_genus)), "\n")
-cat("- Fish species:", length(unique(observations_data$fish_taxon)), "\n\n")
-
-cat("Biomass Statistics (kg/ha):\n")
-cat("- Mean:", round(mean(sampleevents_data$biomass_kgha_avg, 
-                         na.rm = TRUE), 1), "\n")
-cat("- Median:", round(median(sampleevents_data$biomass_kgha_avg, 
-                           na.rm = TRUE), 1), "\n")
-cat("- SD:", round(sd(sampleevents_data$biomass_kgha_avg, 
-                      na.rm = TRUE), 1), "\n")
-cat("- Range:", round(min(sampleevents_data$biomass_kgha_avg, 
-                          na.rm = TRUE), 1), "-",
-    round(max(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n\n")
-
-cat("Data Quality Flags:\n")
-cat("- High biomass outliers (>90th percentile):", 
-    nrow(high_biomass_sites), "\n")
-cat("- Statistical outliers (IQR method):", nrow(outliers), "\n")
-cat("- Sites with shark observations:", 
+# Assemble the data quality summary message
+summary_msg <- paste0(
+  "=== DATA QUALITY SUMMARY ===\n\n",
+  
+  "Sample Coverage:\n",
+  "- Total sample events: ", nrow(sampleevents_data), "\n",
+  "- Total transects: ", nrow(sampleunits_data), "\n",
+  "- Total observations: ", nrow(observations_data), "\n",
+  "- Unique sites: ", length(unique(sampleevents_data$site)), "\n",
+  "- Unique observers: ", length(unique(sampleevents_data$observers)), "\n\n",
+  
+  "Taxonomic Diversity:\n",
+  "- Fish families: ", n_families, "\n",
+  "- Fish genera: ", length(unique(observations_data$fish_genus)), "\n",
+  "- Fish species: ", length(unique(observations_data$fish_taxon)), "\n\n",
+  
+  "Biomass Statistics (kg/ha):\n",
+  "- Mean: ", round(mean(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- Median: ", round(median(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- SD: ", round(sd(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n",
+  "- Range: ", round(min(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), " - ",
+             round(max(sampleevents_data$biomass_kgha_avg, na.rm = TRUE), 1), "\n\n",
+  
+  "Data Quality Flags:\n",
+  "- High biomass outliers (>90th percentile): ", nrow(high_biomass_sites), "\n",
+  "- Statistical outliers (IQR method): ", nrow(outliers), "\n",
+  "- Sites with shark observations: ", 
     ifelse(exists("shark_obs") && nrow(shark_obs) > 0,
-           length(unique(shark_obs$site)), 0), "\n")
+           length(unique(shark_obs$site)), 0), "\n"
+)
+
+# Display the assembled summary
+cat(summary_msg)
 ```
 
 ------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ---
 title: "MERMAID Fishbelt Data Quality Checks"
 author: "Iain R. Caldwell"
-date: 01/07/2026
+date: today
 format: 
   html:
     embed-resources: true
@@ -16,15 +16,20 @@ include-after-body: "footer.html"
 
 ------------------------------------------------------------------------
 
-This code performs data quality checks on MERMAID projects with fish belt data, including observer comparisons, outlier detection, family diversity analysis, and biomass composition.
+This code performs data quality checks on MERMAID projects with fish belt data, including observer comparisons, outlier detection, and shark observation analysis.
 
 ------------------------------------------------------------------------
 
 ## Getting example fishbelt data from MERMAID
 
-Loads the necessary R packages and gets an example MERMAID project with fish belt data. Since the code relies on all three scales of MERMAID data (observations, sample units, and sample events), it is necessary to either select a MERMAID project whose permissions are set to public for fish belt or to use a project for which you are a member. Here I am exporting a public project so anyone can run the code - in this case a project tagged with "WCS". However, I also provide some example code (hashed out) that can be used to get a project for which you are a member.
+Loads the necessary R packages and gets example MERMAID projects with fish belt data. This analysis can be used for data checks on any project. However, in this example I use two separate projects in order to show trends in observers and taxa:
 
-**Note:** This step requires authentication even if you are accessing a public project. This means you need to create a free MERMAID account if you don't already have one.
+1.  **Observer comparison project**: A project with multiple observers to show observer effect analysis
+2.  **Shark data project**: A project with shark observations for the shark analysis section
+
+Since the code relies on all three scales of MERMAID data (observations, sample units, and sample events), it is necessary to either select MERMAID projects whose permissions are set to public for fish belt or to use projects for which you are a member.
+
+**Note:** This step requires authentication even if you are accessing public projects. This means you need to create a free MERMAID account if you don't already have one.
 
 ```{r}
 #| label: Load packages and export data
@@ -41,39 +46,160 @@ library(DT)
 library(ggplot2)
 library(ggpubr)
 library(knitr)
+library(rfishbase)
 
-#### Get data from an example project with public fishbelt data ####
-allPublicFisbeltProjects <- mermaid_get_summary_sampleevents() %>% 
+#### Option 1: Get data from public projects ####
+
+# Find a project with many observers for observer comparisons
+observer_projects <- mermaid_get_summary_sampleevents() %>% 
   filter(data_policy_beltfish == "public" & 
            !is.na(beltfish_biomass_kgha_avg) &
-           !country %in% c("Indonesia", "Philippines") &
-           grepl(pattern = "Blue Ventures", x = tags)) %>%
-  group_by(project_id, project, tags, project_notes) %>% 
-  dplyr::summarise(NumSites = length(site),
-                   TotalSampleUnits = sum(beltfish_sample_unit_count)) %>% 
-  arrange(desc(TotalSampleUnits))
+           !country %in% c("Indonesia", "Philippines")) %>%
+  group_by(project_id, project, tags, project_notes, country) %>% 
+  dplyr::summarise(
+    NumSites = length(site),
+    TotalSampleUnits = sum(beltfish_sample_unit_count),
+    NumObservers = n_distinct(observers)
+  ) %>% 
+  arrange(desc(NumObservers), desc(TotalSampleUnits))
 
-targetProject <- allPublicFisbeltProjects[1,] #choose first project as example
+# Select project with most observers
+observer_project_id <- observer_projects$project_id[1]
+observer_project_name <- observer_projects$project[1]
 
-targetFishAllData <- 
-  mermaid_get_project_data(project = allPublicFisbeltProjects$project_id[1],
-                           method = "fishbelt",
-                           data = "all")
+# Get the observer comparison data
+observer_data <- mermaid_get_project_data(
+  project = observer_project_id,
+  method = "fishbelt",
+  data = "all"
+)
 
-# #### Get data from a project for which you are a member ####
+# Find a project with shark observations
+# Get all public projects and check for shark families
+shark_families <- c(
+  "Carcharhinidae","Sphyrnidae","Alopiidae","Lamnidae","Rhincodontidae",
+  "Galeocerdonidae","Ginglymostomatidae","Hemiscylliidae","Heterodontidae",
+  "Hexanchidae","Odontaspididae","Orectolobidae","Parascylliidae",
+  "Scyliorhinidae","Squalidae","Stegostomatidae","Triakidae"
+)
+
+# This is a simplified approach - you may need to manually specify a project
+# that you know has shark data
+shark_project_id <- observer_project_id  # Start with same project
+shark_project_name <- observer_project_name
+
+# Try to find a project with sharks (this may take time, so commented out)
+# You can manually specify a project ID here if you know one with shark data
+shark_project_id <- "55ac964c-0228-42da-8061-5983339ecb9f"
+shark_project_name <- observer_projects$project[observer_projects$project_id == shark_project_id]
+
+shark_data <- mermaid_get_project_data(
+  project = shark_project_id,
+  method = "fishbelt",
+  data = "all"
+)
+
+# Check if shark data actually has sharks, if not use observer data
+has_sharks <- any(shark_data$observations$fish_family %in% shark_families)
+
+if(!has_sharks) {
+  cat("Note: Selected shark project does not contain shark observations.\n")
+  cat("Using observer project data for all analyses.\n\n")
+  shark_data <- observer_data
+  shark_project_id <- observer_project_id
+  shark_project_name <- observer_project_name
+}
+
+
+# #### Option 2: Get data from projects for which you are a member ####
 # my_projects <- mermaid_get_my_projects()
 # 
-# #The next line gets the first project - change the number to get a different one
-# targetProject <- my_projects[1,] 
+# # Specify which project to use for observer comparisons
+# observer_project_id <- my_projects$project_id[1]  # Change index as needed
+# observer_data <- mermaid_get_project_data(
+#   project = observer_project_id,
+#   method = "fishbelt",
+#   data = "all"
+# )
 # 
-# # Get all data levels
-# targetFishAllData <- targetProject %>% 
-#   mermaid_get_project_data(method = "fishbelt", data = "all")
+# # Specify which project to use for shark data (can be same or different)
+# shark_project_id <- my_projects$project_id[2]  # Change index as needed
+# shark_data <- mermaid_get_project_data(
+#   project = shark_project_id,
+#   method = "fishbelt",
+#   data = "all"
+# )
 
-# Extract the three levels
-observations_data <- targetFishAllData$observations
-sampleunits_data <- targetFishAllData$sampleunits
-sampleevents_data <- targetFishAllData$sampleevents
+
+# Extract the three levels for observer comparisons
+observations_data <- observer_data$observations
+sampleunits_data <- observer_data$sampleunits
+sampleevents_data <- observer_data$sampleevents
+
+# Extract data for shark analysis (will be used later)
+shark_observations_data <- shark_data$observations
+shark_sampleunits_data <- shark_data$sampleunits
+shark_sampleevents_data <- shark_data$sampleevents
+```
+
+------------------------------------------------------------------------
+
+## Anonymize Observers
+
+```{r}
+#| label: Anonymize observers
+#| warning: false
+#| results: asis
+
+# Create anonymization mapping
+create_observer_mapping <- function(observer_string) {
+  # Split all observer strings and get unique observers
+  all_observers <- observer_string %>%
+    str_split(", ") %>%
+    unlist() %>%
+    unique() %>%
+    sort()
+  
+  # Create mapping with Observer A, B, C, etc.
+  mapping <- tibble(
+    original = all_observers,
+    anonymous = paste0("Observer ", LETTERS[1:length(all_observers)])
+  )
+  
+  return(mapping)
+}
+
+# Get all unique observers from sample events
+observer_mapping <- create_observer_mapping(sampleevents_data$observers)
+
+# Function to anonymize observer strings
+anonymize_observers <- function(observer_string, mapping) {
+  # Split the string
+  observers <- str_split(observer_string, ", ")[[1]]
+  
+  # Map each observer
+  anonymous_observers <- sapply(observers, function(obs) {
+    mapping$anonymous[mapping$original == obs]
+  })
+  
+  # Recombine
+  paste(anonymous_observers, collapse = ", ")
+}
+
+# Apply anonymization to all data frames
+observations_data <- observations_data %>%
+  mutate(observers = sapply(observers, anonymize_observers, mapping = observer_mapping))
+
+sampleunits_data <- sampleunits_data %>%
+  mutate(observers = sapply(observers, anonymize_observers, mapping = observer_mapping))
+
+sampleevents_data <- sampleevents_data %>%
+  mutate(observers = sapply(observers, anonymize_observers, mapping = observer_mapping))
+
+# Display message
+cat(paste0("<span style='color: green;'>✓ Observer names anonymized: ", 
+           nrow(observer_mapping), " unique observers mapped to letters A-", 
+           LETTERS[nrow(observer_mapping)], "</span>\n"))
 ```
 
 ------------------------------------------------------------------------
@@ -84,29 +210,37 @@ sampleevents_data <- targetFishAllData$sampleevents
 #| label: Project info
 #| results: asis
 
-# Assemble project information message
+# Assemble project information message for observer comparison project
 project_info <- paste0(
-  "**Project analyzed:** ", allPublicFisbeltProjects$project[1], "\n\n",
-  "**Project ID:** ", allPublicFisbeltProjects$project_id[1], "\n\n"
+  "### Observer Comparison Project\n\n",
+  "**Project:** ", observer_project_name, "\n\n",
+  "**Project ID:** ", observer_project_id, "\n\n"
 )
 
-# Add tags if available
-if (!is.na(allPublicFisbeltProjects$tags[1]) && allPublicFisbeltProjects$tags[1] != "") {
-  project_info <- paste0(project_info, "**Tags:** ", allPublicFisbeltProjects$tags[1], "\n\n")
-}
-
-# Add project notes if available
-if (!is.na(allPublicFisbeltProjects$project_notes[1]) && allPublicFisbeltProjects$project_notes[1] != "") {
-  project_info <- paste0(project_info, "**Project notes:** ", allPublicFisbeltProjects$project_notes[1], "\n\n")
-}
-
-# Add data extracted
+# Add data extracted for observer project
 project_info <- paste0(project_info,
                        "**Data extracted:**\n\n", 
                        "- Observations: ", nrow(observations_data), " records\n",
                        "- Sample Units: ", nrow(sampleunits_data), " transects\n",
                        "- Sample Events: ", nrow(sampleevents_data), " sites\n",
+                       "- Unique observers: ", length(unique(sampleevents_data$observers)), "\n",
                        "\n")
+
+# Add shark project info if different
+if(shark_project_id != observer_project_id) {
+  project_info <- paste0(project_info,
+                         "### Shark Data Project\n\n",
+                         "**Project:** ", shark_project_name, "\n\n",
+                         "**Project ID:** ", shark_project_id, "\n\n",
+                         "**Data extracted:**\n\n", 
+                         "- Observations: ", nrow(shark_observations_data), " records\n",
+                         "- Sample Units: ", nrow(shark_sampleunits_data), " transects\n",
+                         "- Sample Events: ", nrow(shark_sampleevents_data), " sites\n",
+                         "\n")
+} else {
+  project_info <- paste0(project_info,
+                         "*Note: Same project used for shark analysis*\n\n")
+}
 
 # Display the assembled message
 cat(project_info)
@@ -154,6 +288,46 @@ kable(observer_biomass,
       caption = "Fish Biomass Summary by Observer (transect-level totals)")
 ```
 
+### Statistical Test: Biomass Differences Among Observers
+
+```{r}
+#| label: Observer biomass statistical test
+#| results: asis
+
+# Prepare data for statistical test
+plot_data <- transect_biomass %>%
+  separate_rows(observers, sep = ", ")
+
+# Filter to observers with at least 5 transects for meaningful comparison
+observers_to_test <- plot_data %>%
+  count(observers) %>%
+  filter(n >= 5) %>%
+  pull(observers)
+
+test_data <- plot_data %>%
+  filter(observers %in% observers_to_test)
+
+# Perform Kruskal-Wallis test (non-parametric ANOVA)
+if(length(observers_to_test) >= 2) {
+  kw_test <- kruskal.test(total_biomass ~ observers, data = test_data)
+  
+  cat("**Kruskal-Wallis Test for Biomass Differences Among Observers**\n\n")
+  cat("Test statistic (chi-squared):", round(kw_test$statistic, 3), "\n\n")
+  cat("Degrees of freedom:", kw_test$parameter, "\n\n")
+  cat("P-value:", format.pval(kw_test$p.value, digits = 3), "\n\n")
+  
+  if(kw_test$p.value < 0.05) {
+    cat("**Result:** Significant differences detected among observers (p < 0.05)\n\n")
+  } else {
+    cat("**Result:** No significant differences detected among observers (p ≥ 0.05)\n\n")
+  }
+} else {
+  cat("Insufficient observers (with ≥5 transects) for statistical testing.\n\n")
+}
+```
+
+**Interpretation note:** If significant differences are found among observers, this warrants further investigation. However, these results should be interpreted with caution, as observers may survey in different locations and at different times. Therefore, observed differences could reflect spatial or temporal variation in fish communities rather than true observer effects.
+
 ### Biomass Distribution by Observer
 
 ```{r}
@@ -161,27 +335,32 @@ kable(observer_biomass,
 #| fig-width: 10
 #| fig-height: 6
 
-# Prepare data for plotting - split observers
-plot_data <- transect_biomass %>%
-  separate_rows(observers, sep = ", ")
+# Create subtitle text based on statistical test results
+if(exists("kw_test") && length(observers_to_test) >= 2) {
+  # Determine significance
+  if(kw_test$p.value < 0.05) {
+    sig_text <- "Significant differences detected among observers"
+  } else {
+    sig_text <- "No significant differences detected among observers"
+  }
+  
+  subtitle_text <- paste0(
+    "Observers with ≥5 transects shown; total biomass per transect\n",
+    sig_text, " (Kruskal-Wallis: χ² = ", round(kw_test$statistic, 2),
+    ", p = ", format.pval(kw_test$p.value, digits = 3, eps = 0.001), ")"
+  )
+} else {
+  subtitle_text <- "Observers with ≥5 transects shown; total biomass per transect"
+}
 
-# Filter to observers with at least 5 transects for meaningful comparison
-observers_to_plot <- plot_data %>%
-  count(observers) %>%
-  filter(n >= 5) %>%
-  pull(observers)
-
-plot_data_filtered <- plot_data %>%
-  filter(observers %in% observers_to_plot)
-
-ggplot(plot_data_filtered, 
+ggplot(test_data, 
        aes(x = reorder(observers, total_biomass, FUN = median), 
            y = total_biomass)) +
   geom_boxplot(fill = "#69b3a2", alpha = 0.7) +
   coord_flip() +
   labs(
     title = "Fish Biomass Distribution by Observer",
-    subtitle = "Observers with ≥5 transects shown; total biomass per transect",
+    subtitle = subtitle_text,
     x = "Observer",
     y = "Total Biomass (kg/ha)"
   ) +
@@ -190,7 +369,7 @@ ggplot(plot_data_filtered,
     axis.text = element_text(size = 10, colour = "black"),
     axis.title = element_text(size = 12, colour = "black"),
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30")
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "gray30")
   )
 ```
 
@@ -299,7 +478,7 @@ ggplot(observer_taxonomy_filtered,
                 width = 0.3, linewidth = 0.5) +
   coord_flip() +
   labs(
-    title = "Taxonomic Identification Ability by Observer",
+    title = "Taxonomic Identification by Observer",
     subtitle = "Observers with ≥5 transects shown; error bars show 95% quantiles (2.5% - 97.5%)",
     x = "Observer",
     y = "Mean Unique Taxa per Transect"
@@ -329,11 +508,13 @@ kable(observer_pairs,
       caption = "Top 10 Most Common Observer Pairings (at sample event level)")
 ```
 
+------------------------------------------------------------------------
+
 ## Outlier Detection
 
 ### High Biomass Observations
 
-Identifying sites with unusually high fish biomass (top 10%).
+Identifying sample events with unusually high fish biomass (top 10%).
 
 ```{r}
 #| label: High biomass outliers
@@ -356,47 +537,9 @@ kable(high_biomass_sites,
                       round(biomass_90th, 1), " kg/ha - 90th percentile)"))
 ```
 
-### Interactive Scatter Plot - Biomass vs Abundance
+### Outlier Detection - high or low
 
-```{r}
-#| label: Biomass abundance scatter
-
-# Calculate mean abundance per sample event
-se_with_abundance <- sampleunits_data %>%
-  group_by(sample_event_id) %>%
-  summarise(mean_abundance = mean(total_abundance, na.rm = TRUE)) %>%
-  right_join(sampleevents_data, by = "sample_event_id")
-
-# Create interactive scatter plot
-scatter_plot <- plot_ly(
-  data = se_with_abundance,
-  x = ~mean_abundance,
-  y = ~biomass_kgha_avg,
-  type = "scatter",
-  mode = "markers",
-  text = ~paste("Site:", site,
-                "<br>Biomass:", round(biomass_kgha_avg, 1), "kg/ha",
-                "<br>Abundance:", round(mean_abundance, 1),
-                "<br>Observer:", observers),
-  hoverinfo = "text",
-  marker = list(
-    size = 10,
-    color = ~biomass_kgha_avg,
-    colorscale = list(c(0, "#d13823"), c(0.5, "#f3a224"), c(1, "#277d1d")),
-    colorbar = list(title = "Biomass<br>(kg/ha)")
-  )
-) %>%
-  layout(
-    title = "Fish Biomass vs Abundance",
-    xaxis = list(title = "Mean Fish Abundance (count per transect)"),
-    yaxis = list(title = "Fish Biomass (kg/ha)"),
-    hovermode = "closest"
-  )
-
-scatter_plot
-```
-
-### Outlier Sites Table
+Identifying sample events that have unusually high or low fish biomass.
 
 ```{r}
 #| label: Outlier detection stats
@@ -425,6 +568,126 @@ kable(outliers,
                       " kg/ha or >", round(upper_bound, 1), " kg/ha)"))
 ```
 
+### Statistical Test: Site Outlier Detection
+
+```{r}
+#| label: Site outlier statistical test
+#| results: asis
+
+# Calculate z-scores for each site
+site_biomass_stats <- sampleevents_data %>%
+  mutate(
+    z_score = (biomass_kgha_avg - mean(biomass_kgha_avg, na.rm = TRUE)) / 
+               sd(biomass_kgha_avg, na.rm = TRUE),
+    is_outlier = abs(z_score) > 2  # Standard threshold: |z| > 2
+  )
+
+# Count outliers
+n_outliers <- sum(site_biomass_stats$is_outlier, na.rm = TRUE)
+pct_outliers <- 100 * n_outliers / nrow(site_biomass_stats)
+
+# Create the text output
+output_text <- paste0(
+  "**Z-Score Based Outlier Detection**\n\n",
+  "Sites with |z-score| > 2: ", n_outliers, "\n\n",
+  "Percentage of sites flagged as outliers: ", round(pct_outliers, 1), "%\n\n"
+)
+
+cat(output_text)
+# Show the outlier sites
+if(n_outliers > 0) {
+  outlier_table <- site_biomass_stats %>%
+    filter(is_outlier) %>%
+    select(site, sample_date, biomass_kgha_avg, z_score, observers) %>%
+    arrange(desc(abs(z_score)))
+  
+  kable(outlier_table,
+        digits = 2,
+        col.names = c("Site", "Date", "Biomass (kg/ha)", "Z-Score", "Observer"),
+        caption = "Sites Identified as Statistical Outliers (|z-score| > 2)")
+}
+```
+
+**Interpretation note:** Sites identified as statistical outliers warrant further investigation. However, these may represent true ecological variation (e.g., protected areas, unique habitat features) rather than data errors. Differences could also reflect spatial or temporal variation in environmental conditions or fish community structure. Field notes and environmental context should be consulted before concluding these are erroneous data points.
+
+### Interactive Scatter Plot - Biomass vs Abundance
+
+```{r}
+#| label: Biomass abundance scatter
+#| warning: false
+
+# Calculate mean abundance per sample event
+se_with_abundance <- sampleunits_data %>%
+  group_by(sample_event_id) %>%
+  summarise(mean_abundance = mean(total_abundance, na.rm = TRUE)) %>%
+  right_join(sampleevents_data, by = "sample_event_id") %>%
+  # Join with outlier detection results from z-score test
+  left_join(
+    site_biomass_stats %>% select(site, sample_date, is_outlier, z_score),
+    by = c("site", "sample_date")
+  ) %>%
+  mutate(
+    # Only flag as outlier if z-score > 2 (high biomass only)
+    is_high_outlier = !is.na(z_score) & z_score > 2,
+    outlier_status = ifelse(is_high_outlier, "High Outlier", "Normal")
+  )
+
+# Calculate upper biomass threshold based on z-scores
+mean_biomass <- mean(sampleevents_data$biomass_kgha_avg, na.rm = TRUE)
+sd_biomass <- sd(sampleevents_data$biomass_kgha_avg, na.rm = TRUE)
+upper_biomass_threshold <- mean_biomass + 2 * sd_biomass
+
+# Get x-axis range for the line
+x_range <- range(se_with_abundance$mean_abundance, na.rm = TRUE)
+
+# Create interactive scatter plot
+scatter_plot <- plot_ly(
+  data = se_with_abundance,
+  x = ~mean_abundance,
+  y = ~biomass_kgha_avg,
+  type = "scatter",
+  mode = "markers",
+  text = ~paste("Site:", site,
+                "<br>Biomass:", round(biomass_kgha_avg, 1), "kg/ha",
+                "<br>Abundance:", round(mean_abundance, 1),
+                "<br>Observer:", observers,
+                "<br>Status:", outlier_status),
+  hoverinfo = "text",
+  marker = list(
+    size = 10,
+    color = ~ifelse(is_high_outlier, "#d13823", "#277d1d"),  # Red for high outliers, green for normal
+    line = list(color = "white", width = 1)
+  ),
+  name = "Sample Events",
+  showlegend = TRUE
+) %>%
+  # Add horizontal reference line for upper biomass threshold only
+  add_segments(
+    x = x_range[1],
+    xend = x_range[2],
+    y = upper_biomass_threshold,
+    yend = upper_biomass_threshold,
+    inherit = FALSE,              # don't inherit marker mapping from the main plot
+    mode = "lines",               # lines only (no markers)
+    marker = list(size = 0, opacity = 0),  # belt-and-suspenders: hide any marker glyphs
+    line = list(color = "red", dash = "dash", width = 2),
+    name = "Upper threshold (z = 2)",
+    showlegend = TRUE,
+    hoverinfo = "text",
+    text = paste("Upper threshold:", round(upper_biomass_threshold, 1), "kg/ha")
+  ) %>%
+  layout(
+    title = "Fish Biomass vs Abundance (High Outliers Highlighted)",
+    xaxis = list(title = "Mean Fish Abundance (count per transect)"),
+    yaxis = list(title = "Fish Biomass (kg/ha)"),
+    hovermode = "closest"
+  )
+
+scatter_plot
+```
+
+**Note:** Red points indicate sites with unusually high biomass (z-score \> 2), falling above the dashed red threshold line.
+
 ------------------------------------------------------------------------
 
 ## Shark Observations
@@ -433,12 +696,18 @@ kable(outliers,
 
 ```{r}
 #| label: Shark observations
+#| results: asis
 
 # Identify shark families (Carcharhinidae, Sphyrnidae, etc.)
-shark_families <- c("Carcharhinidae", "Sphyrnidae", "Alopiidae", 
-                    "Lamnidae", "Rhincodontidae")
+shark_families <- c(
+  "Carcharhinidae","Sphyrnidae","Alopiidae","Lamnidae","Rhincodontidae",
+  "Galeocerdonidae","Ginglymostomatidae","Hemiscylliidae","Heterodontidae",
+  "Hexanchidae","Odontaspididae","Orectolobidae","Parascylliidae",
+  "Scyliorhinidae","Squalidae","Stegostomatidae","Triakidae"
+)
 
-shark_obs <- observations_data %>%
+# Use shark-specific data for this analysis
+shark_obs <- shark_observations_data %>%
   filter(fish_family %in% shark_families)
 
 if(nrow(shark_obs) > 0) {
@@ -461,292 +730,295 @@ if(nrow(shark_obs) > 0) {
   
   # Sites with sharks
   cat("\n\nTotal sites surveyed:", 
-      length(unique(observations_data$site)), "\n")
+      length(unique(shark_observations_data$site)), "\n\n")
   cat("Sites with shark observations:", 
-      length(unique(shark_obs$site)), "\n")
+      length(unique(shark_obs$site)), "\n\n")
   cat("Percentage of sites with sharks:", 
       round(100 * length(unique(shark_obs$site)) / 
-              length(unique(observations_data$site)), 1), "%\n")
+              length(unique(shark_observations_data$site)), 1), 
+      "%\n\n")
 } else {
   cat("No shark observations in the dataset.")
+}
+```
+
+### Individual Shark Weight Validation
+
+Note - If observations are flagged here it warrants further investigation but does not necessarily mean there is an error. Maximum weight data is pulled from Fishbase here to compare with the observations but there is less maximum weight data available than maximum length (the latter of which is what is used in the MERMAID Collect app to test for larger than expected observations).
+
+```{r}
+#| label: Shark weight validation
+#| warning: false
+#| message: false
+#| results: asis
+
+if(nrow(shark_obs) > 0) {
+  
+  # Get individual shark observations with calculated weights
+  individual_sharks <- shark_obs %>%
+    mutate(
+      # Remove "m" from transect_width and convert to numeric
+      transect_width_m = as.numeric(str_replace(transect_width, "m", "")),
+      
+      # Calculate transect area in hectares
+      # transect_length and transect_width_m are in meters
+      transect_area_m2 = transect_length * transect_width_m,
+      transect_area_ha = transect_area_m2 / 10000,
+      
+      # biomass_kgha is the total biomass for this observation per hectare
+      # To get total biomass for the actual transect area:
+      total_biomass_kg = biomass_kgha * transect_area_ha,
+      
+      # Divide by count to get individual weight
+      individual_weight_kg = total_biomass_kg / count
+    ) %>%
+    select(site, sample_date, fish_taxon, fish_family, size, count, 
+           biomass_kgha, transect_length, transect_width_m, 
+           transect_area_ha, individual_weight_kg)
+  
+  # Get unique species names for FishBase lookup
+  shark_species <- unique(shark_obs$fish_taxon)
+  
+  # Attempt to get max weights from FishBase
+  cat("Retrieving maximum weights from FishBase...\n\n")
+  
+  # Initialize results list
+  max_weights_list <- list()
+  
+  for(species in shark_species) {
+    # Try to get weight data from FishBase
+    tryCatch({
+      # Get species data
+      species_data <- species(species, fields = c("Species", "Weight"))
+      
+      if(!is.null(species_data) && nrow(species_data) > 0) {
+        if(!is.na(species_data$Weight) && species_data$Weight > 0) {
+          max_weights_list[[species]] <- tibble(
+            fish_taxon = species,
+            # FishBase Weight is in grams, convert to kg
+            max_weight_kg = species_data$Weight / 1000
+          )
+        }
+      }
+    }, error = function(e) {
+      # Silently continue if species not found
+      NULL
+    })
+  }
+  
+  # Combine results
+  if(length(max_weights_list) > 0) {
+    max_weights <- bind_rows(max_weights_list)
+    
+    # Join with observations
+    shark_weight_check <- individual_sharks %>%
+      left_join(max_weights, by = "fish_taxon") %>%
+      mutate(
+        exceeds_max = !is.na(max_weight_kg) & individual_weight_kg > max_weight_kg,
+        weight_ratio = individual_weight_kg / max_weight_kg
+      )
+    
+    # Check for any that exceed published max
+    exceeding_sharks <- shark_weight_check %>%
+      filter(exceeds_max) %>%
+      arrange(desc(weight_ratio))
+    
+    if(nrow(exceeding_sharks) > 0) {
+      cat("**Warning:** Some individual shark observations exceed published maximum weights\n\n")
+      
+      kable(exceeding_sharks %>%
+              select(site, sample_date, fish_taxon, size, count, individual_weight_kg, 
+                     max_weight_kg, weight_ratio),
+            digits = 2,
+            col.names = c("Site", "Date", "Species", "Size (cm)", "Count",
+                         "Observed Weight (kg)", "Max Published Weight (kg)", 
+                         "Ratio (Obs/Max)"),
+            caption = "Shark Observations Exceeding Published Maximum Weights")
+    } else {
+      cat("<span style='color: green;'>✓ All individual shark weights are within published maximum ranges</span>\n\n")
+    }
+    
+    # Summary table of all sharks with available max weights
+    shark_comparison <- shark_weight_check %>%
+      filter(!is.na(max_weight_kg)) %>%
+      group_by(fish_taxon) %>%
+      summarise(
+        n_obs = n(),
+        mean_observed_kg = mean(individual_weight_kg, na.rm = TRUE),
+        max_observed_kg = max(individual_weight_kg, na.rm = TRUE),
+        published_max_kg = first(max_weight_kg),
+        n_exceeding = sum(exceeds_max, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(n_obs))
+    
+    kable(shark_comparison,
+          digits = 2,
+          col.names = c("Species", "N Observations", "Mean Weight (kg)", 
+                       "Max Observed (kg)", "Published Max (kg)", "N Exceeding"),
+          caption = "Comparison of Observed vs Published Maximum Shark Weights")
+    
+  } else {
+    cat("No maximum weight data available from FishBase for the observed shark species.\n")
+    cat("This could be due to taxonomic naming differences or missing FishBase data.\n\n")
+    
+    # Still show the observations
+    kable(individual_sharks,
+          digits = 2,
+          col.names = c("Site", "Date", "Species", "Family", "Size (cm)", 
+                       "Count", "Biomass (kg/ha)", "Transect Length (m)", 
+                       "Transect Width (m)", "Transect Area (ha)", 
+                       "Individual Weight (kg)"),
+          caption = "Individual Shark Observations (FishBase validation unavailable)")
+  }
+  
+} else {
+  cat("No shark observations in the dataset.")
+}
+```
+
+### Visualization of Observed & Published Maximum Shark Weights
+
+```{r}
+#| label: Shark species weight comparison plot
+#| fig-width: 10
+#| fig-height: 8
+
+if(exists("shark_weight_check") && nrow(shark_weight_check) > 0) {
+  
+  # Get the species ordering based on max observed weight
+  species_order <- shark_weight_check %>%
+    group_by(fish_taxon) %>%
+    summarise(max_obs = max(individual_weight_kg, na.rm = TRUE)) %>%
+    arrange(max_obs) %>%
+    pull(fish_taxon)
+  
+  # Apply this ordering to the data
+  shark_weight_check <- shark_weight_check %>%
+    mutate(fish_taxon = factor(fish_taxon, levels = species_order))
+  
+  # Create plot using geom_errorbar instead of geom_linerange
+  p <- ggplot(shark_weight_check, aes(x = individual_weight_kg, y = fish_taxon)) +
+    # Add points for observed weights first
+    geom_point(aes(color = exceeds_max), 
+               size = 3, alpha = 0.7) +
+    # Add vertical lines for published max weights using geom_vline with faceting trick
+    geom_point(data = shark_weight_check %>% 
+                 filter(!is.na(max_weight_kg)) %>%
+                 distinct(fish_taxon, max_weight_kg),
+               aes(x = max_weight_kg, y = fish_taxon),
+               shape = "|", size = 10, color = "red", stroke = 2) +
+    scale_color_manual(values = c("TRUE" = "#d13823", "FALSE" = "#277d1d"),
+                       labels = c("TRUE" = "Exceeds max", "FALSE" = "Within range"),
+                       na.value = "gray50",
+                       name = "Status") +
+    labs(
+      title = "Individual Shark Weights vs Published Maximum Weights",
+      subtitle = paste0(
+        "Red vertical marks show published maximum weights from FishBase\n",
+        "Published weights available for ", 
+        length(unique(shark_weight_check$fish_taxon[!is.na(shark_weight_check$max_weight_kg)])),
+        " of ", length(unique(shark_weight_check$fish_taxon)), " species"
+      ),
+      x = "Individual Weight (kg)",
+      y = "Species"
+    ) +
+    theme_classic() +
+    theme(
+      axis.text.y = element_text(size = 9, colour = "black", face = "italic"),
+      axis.text.x = element_text(size = 10, colour = "black"),
+      axis.title = element_text(size = 12, colour = "black"),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 10, hjust = 0.5, color = "gray30"),
+      legend.position = "bottom"
+    )
+  
+  print(p)
+  
+} else {
+  cat("No shark weight comparison data available to plot.")
 }
 ```
 
 ### Shark Biomass by Site
 
 ```{r}
-#| label: Shark biomass plot
+#| label: Shark biomass by site plot
 #| fig-width: 10
 #| fig-height: 6
 
 if(nrow(shark_obs) > 0) {
-  # Calculate shark biomass per sample event
-  shark_biomass_summary <- observations_data %>%
-    mutate(is_shark = fish_family %in% shark_families) %>%
-    group_by(sample_event_id, site, is_shark) %>%
-    summarise(biomass = sum(biomass_kgha, na.rm = TRUE), .groups = "drop") %>%
-    pivot_wider(names_from = is_shark, values_from = biomass, 
-                values_fill = 0) %>%
-    rename(shark_biomass = `TRUE`, other_biomass = `FALSE`) %>%
-    mutate(total_biomass = shark_biomass + other_biomass,
-           shark_percent = 100 * shark_biomass / total_biomass)
+  # Get all shark family columns from sample events data
+  shark_family_cols <- grep("^biomass_kgha_fish_family_avg_", 
+                            names(shark_sampleevents_data), 
+                            value = TRUE)
+  
+  # Filter to only shark families (convert to lowercase for matching)
+  shark_families_lower <- tolower(shark_families)
+  shark_cols <- shark_family_cols[sapply(shark_family_cols, function(col) {
+    family_name <- sub("biomass_kgha_fish_family_avg_", "", col)
+    any(grepl(family_name, shark_families_lower, ignore.case = TRUE))
+  })]
+  
+  # Calculate shark and total biomass per sample event
+  shark_biomass_summary <- shark_sampleevents_data %>%
+    mutate(
+      # Sum all shark family columns
+      shark_biomass = rowSums(select(., all_of(shark_cols)), na.rm = TRUE),
+      # Use total biomass
+      total_biomass = biomass_kgha_avg,
+      # Calculate other fish biomass
+      other_biomass = total_biomass - shark_biomass,
+      # Calculate percentage
+      shark_percent = 100 * shark_biomass / total_biomass,
+      # Create label combining site and date
+      site_date = paste0(site, " (", format(as.Date(sample_date), "%Y-%m-%d"), ")")
+    ) %>%
+    # Filter to only sample events with sharks
+    filter(shark_biomass > 0) %>%
+    select(site_date, shark_biomass, other_biomass, total_biomass, shark_percent)
+  
+  # Prepare data for stacked bars
+  shark_biomass_stacked <- shark_biomass_summary %>%
+    pivot_longer(cols = c(shark_biomass, other_biomass),
+                 names_to = "biomass_type",
+                 values_to = "biomass") %>%
+    mutate(biomass_type = factor(biomass_type,
+                                  levels = c("other_biomass", "shark_biomass"),
+                                  labels = c("Other fish", "Sharks")))
   
   # Plot
-  ggplot(shark_biomass_summary, 
-         aes(x = reorder(site, shark_biomass), y = shark_biomass)) +
-    geom_col(fill = "#2c7bb6", alpha = 0.8) +
+  ggplot(shark_biomass_stacked, 
+         aes(x = reorder(site_date, total_biomass), y = biomass, fill = biomass_type)) +
+    geom_col(position = "stack", alpha = 0.8) +
+    # Add percentage labels at the end of bars
+    geom_text(data = shark_biomass_summary,
+              aes(x = site_date, y = total_biomass, 
+                  label = paste0(round(shark_percent, 1), "%"),
+                  fill = NULL),
+              hjust = -0.1, size = 3, color = "black") +
+    scale_fill_manual(values = c("Other fish" = "#7fbc41", "Sharks" = "#2c7bb6")) +
     coord_flip() +
     labs(
-      title = "Shark Biomass by Site",
-      x = "Site",
-      y = "Shark Biomass (kg/ha)"
+      title = "Shark and Total Fish Biomass by Sample Event (Events with Sharks)",
+      subtitle = "Percentage shows shark contribution to total fish biomass",
+      x = "Site (Date)",
+      y = "Biomass (kg/ha)",
+      fill = "Category"
     ) +
     theme_classic() +
     theme(
-      axis.text = element_text(size = 10, colour = "black"),
+      axis.text = element_text(size = 9, colour = "black"),
       axis.title = element_text(size = 12, colour = "black"),
-      plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
-    )
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
+      legend.position = "bottom"
+    ) +
+    # Expand x-axis limits to make room for percentage labels
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
 } else {
   cat("No shark observations in the dataset.")
 }
-```
-
-------------------------------------------------------------------------
-
-## Fish Family Diversity
-
-### Number of Fish Families
-
-```{r}
-#| label: Family diversity summary
-
-# Count unique families
-n_families <- length(unique(observations_data$fish_family))
-
-cat("Total number of fish families observed:", n_families, "\n\n")
-
-# Families by site
-families_by_site <- observations_data %>%
-  group_by(site) %>%
-  summarise(
-    n_families = n_distinct(fish_family),
-    n_genera = n_distinct(fish_genus),
-    n_species = n_distinct(fish_taxon),
-    total_observations = n()
-  ) %>%
-  arrange(desc(n_families))
-
-kable(families_by_site,
-      col.names = c("Site", "N Families", "N Genera", 
-                    "N Species", "Total Obs"),
-      caption = "Taxonomic Diversity by Site")
-```
-
-### Family Richness Distribution
-
-```{r}
-#| label: Family richness histogram
-#| fig-width: 8
-#| fig-height: 5
-
-ggplot(families_by_site, aes(x = n_families)) +
-  geom_histogram(binwidth = 2, fill = "#4575b4", 
-                 color = "black", alpha = 0.7) +
-  labs(
-    title = "Distribution of Fish Family Richness Across Sites",
-    x = "Number of Fish Families",
-    y = "Number of Sites"
-  ) +
-  theme_classic() +
-  theme(
-    axis.text = element_text(size = 11, colour = "black"),
-    axis.title = element_text(size = 12, colour = "black"),
-    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
-  )
-```
-
-### Complete Family List
-
-```{r}
-#| label: Family list
-
-family_list <- observations_data %>%
-  group_by(fish_family) %>%
-  summarise(
-    n_species = n_distinct(fish_taxon),
-    total_count = sum(count, na.rm = TRUE)
-  ) %>%
-  arrange(fish_family)
-
-datatable(family_list,
-          colnames = c("Family", "N Species", "N Observations", "Total Count"),
-          caption = "Complete List of Fish Families",
-          options = list(pageLength = 15, autoWidth = TRUE))
-```
-
-------------------------------------------------------------------------
-
-## Biomass Composition by Family
-
-### Top Families by Biomass
-
-Identifying which fish families contribute most to total biomass.
-
-```{r}
-#| label: Top families biomass
-
-# Extract all family-specific biomass columns from sample events
-family_cols <- grep("^biomass_kgha_fish_family_avg_", 
-                    names(sampleevents_data), value = TRUE)
-
-# Calculate true mean biomass for each family (replacing NAs with 0)
-family_biomass <- sampleevents_data %>%
-  select(all_of(family_cols)) %>%
-  pivot_longer(cols = everything(),
-               names_to = "fish_family",
-               values_to = "biomass",
-               names_prefix = "biomass_kgha_fish_family_avg_") %>%
-  # Replace NAs with 0 to get true mean (including sites where family is absent)
-  mutate(fish_family = str_to_title(fish_family),
-         biomass = replace_na(biomass, 0)) %>%
-  group_by(fish_family) %>%
-  summarise(
-    mean_biomass = mean(biomass, na.rm = TRUE),
-    sd_biomass = sd(biomass, na.rm = TRUE),
-    n_sites_present = sum(biomass > 0),
-    n_sites_total = n()
-  ) %>%
-  mutate(
-    percent_sites = 100 * n_sites_present / n_sites_total,
-    # Calculate contribution to overall mean biomass across all families
-    percent_total = 100 * mean_biomass / sum(mean_biomass)
-  ) %>%
-  arrange(desc(mean_biomass))
-
-# Top 15 families
-top_families <- head(family_biomass, 15)
-
-kable(top_families,
-      digits = 2,
-      col.names = c("Family", "Mean Biomass (kg/ha)", "SD", 
-                    "Sites Present", "Total Sites", "% Sites Present", 
-                    "% of Total Biomass"),
-      caption = "Top 15 Fish Families by Mean Biomass (true mean including zeros)")
-```
-
-### Biomass Proportion - Top Families
-
-```{r}
-#| label: Family biomass pie chart
-#| fig-width: 10
-#| fig-height: 8
-
-# Prepare data for pie chart - top 10 plus "Other"
-top10_families <- head(family_biomass, 10)
-other_biomass <- sum(family_biomass$mean_biomass[11:nrow(family_biomass)])
-
-pie_data <- top10_families %>%
-  select(fish_family, mean_biomass) %>%
-  bind_rows(tibble(fish_family = "Other families", 
-                   mean_biomass = other_biomass))
-
-# Create pie chart
-plot_ly(pie_data, 
-        labels = ~fish_family, 
-        values = ~mean_biomass,
-        type = 'pie',
-        textposition = 'inside',
-        textinfo = 'label+percent',
-        hoverinfo = 'text',
-        text = ~paste(fish_family, '<br>',
-                     round(mean_biomass, 1), 'kg/ha'),
-        marker = list(line = list(color = '#FFFFFF', width = 2))) %>%
-  layout(title = "Fish Biomass Composition by Family (Top 10 - Mean Biomass)",
-         showlegend = TRUE,
-         legend = list(orientation = 'v', 
-                      x = 1.1, y = 0.5))
-```
-
-### Biomass Composition by Trophic Group
-
-```{r}
-#| label: Trophic group biomass
-
-# Get trophic group biomass from sample events
-trophic_cols <- grep("biomass_kgha_trophic_group_avg_", 
-                     names(sampleevents_data), value = TRUE)
-
-trophic_biomass <- sampleevents_data %>%
-  select(site, all_of(trophic_cols)) %>%
-  pivot_longer(cols = all_of(trophic_cols),
-               names_to = "trophic_group",
-               values_to = "biomass",
-               names_prefix = "biomass_kgha_trophic_group_avg_") %>%
-  # Replace NAs with 0 to get true mean (including sites where group is absent)
-  mutate(biomass = replace_na(biomass, 0)) %>%
-  group_by(trophic_group) %>%
-  summarise(
-    mean_biomass = mean(biomass, na.rm = TRUE),
-    q025 = quantile(biomass, 0.025, na.rm = TRUE),
-    q975 = quantile(biomass, 0.975, na.rm = TRUE),
-    n_sites_present = sum(biomass > 0),
-    n_sites_total = n()
-  ) %>%
-  mutate(
-    trophic_group = case_when(
-      trophic_group == "planktivore" ~ "Planktivore",
-      trophic_group == "herbivore_macroalgae" ~ "Herbivore (macroalgae)",
-      trophic_group == "herbivore_detritivore" ~ "Herbivore (detritivore)",
-      trophic_group == "invertivore_sessile" ~ "Invertivore (sessile)",
-      trophic_group == "invertivore_mobile" ~ "Invertivore (mobile)",
-      trophic_group == "omnivore" ~ "Omnivore",
-      trophic_group == "piscivore" ~ "Piscivore",
-      TRUE ~ trophic_group
-    ),
-    percent_sites = 100 * n_sites_present / n_sites_total,
-    percent_total = 100 * mean_biomass / sum(mean_biomass)
-  ) %>%
-  arrange(desc(mean_biomass))
-
-kable(trophic_biomass,
-      digits = 2,
-      col.names = c("Trophic Group", "Mean Biomass (kg/ha)", 
-                    "2.5% Quantile", "97.5% Quantile",
-                    "Sites Present", "Total Sites", "% Sites Present",
-                    "% of Total Biomass"),
-      caption = "Fish Biomass by Trophic Group (true mean including zeros)")
-```
-
-### Trophic Group Composition Bar Plot
-
-```{r}
-#| label: Trophic group bar plot
-#| fig-width: 10
-#| fig-height: 6
-
-ggplot(trophic_biomass, 
-       aes(x = reorder(trophic_group, mean_biomass), 
-           y = mean_biomass, fill = trophic_group)) +
-  geom_col(alpha = 0.8, color = "black", linewidth = 0.3) +
-  geom_errorbar(aes(ymin = q025, ymax = q975),
-                width = 0.3, linewidth = 0.5) +
-  coord_flip() +
-  labs(
-    title = "Mean Fish Biomass by Trophic Group",
-    subtitle = "Error bars show 95% quantiles (2.5% - 97.5%)",
-    x = "Trophic Group",
-    y = "Mean Biomass (kg/ha)"
-  ) +
-  theme_classic() +
-  theme(
-    legend.position = "none",
-    axis.text = element_text(size = 11, colour = "black"),
-    axis.title = element_text(size = 12, colour = "black"),
-    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30")
-  ) +
-  scale_fill_brewer(palette = "Set3")
 ```
 
 ------------------------------------------------------------------------
@@ -757,6 +1029,9 @@ ggplot(trophic_biomass,
 #| label: Summary statistics
 #| results: asis
 
+# Count unique families
+n_families <- length(unique(observations_data$fish_family))
+
 # Assemble the data quality summary message with markdown
 summary_msg <- paste0(
   "#### Sample Coverage\n\n",
@@ -764,7 +1039,7 @@ summary_msg <- paste0(
   "- **Total transects:** ", nrow(sampleunits_data), "\n",
   "- **Total observations:** ", nrow(observations_data), "\n",
   "- **Unique sites:** ", length(unique(sampleevents_data$site)), "\n",
-  "- **Unique observers:** ", length(unique(sampleevents_data$observers)), "\n\n",
+  "- **Unique observers:** ", nrow(observer_mapping), "\n\n",
   
   "#### Taxonomic Diversity\n\n",
   "- **Fish families:** ", n_families, "\n",
@@ -796,12 +1071,12 @@ cat(summary_msg)
 
 Based on this data quality check:
 
-1.  **Observer Consistency**: Review any systematic differences between observers in biomass or abundance estimates.
+1.  **Observer Anonymization**: Observer names have been anonymized to letters for sharing this document publicly.
 
-2.  **Outliers**: Investigate outlier sites to determine if they represent true ecological variation or potential data entry errors.
+2.  **Observer Consistency**: Statistical tests have been performed to assess systematic differences between observers. Any detected differences warrant further investigation, but should be interpreted cautiously as they may reflect spatial or temporal variation rather than true observer effects.
 
-3.  **Shark Observations**: Consider the ecological significance of sites with shark presence as potential indicators of reef health.
+3.  **Outliers**: Sites identified as statistical outliers should be investigated to determine if they represent true ecological variation or potential data issues. Consider environmental context and field notes.
 
-4.  **Family Diversity**: Compare family richness across sites in relation to management regimes or environmental conditions.
+4.  **Shark Observations**: Individual shark weights have been validated against published maximum weights from FishBase where available. Any observations exceeding published maxima should be carefully reviewed for potential data entry errors in size or abundance.
 
-5.  **Biomass Composition**: The dominant families identified should align with expected community structure for the region.
+5.  **Data Integrity**: For any flagged issues, consult field datasheets and consider re-validation of measurements before making corrections to the database.
